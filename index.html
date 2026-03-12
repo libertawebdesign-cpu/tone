@@ -66,6 +66,7 @@
   const sliderLine = document.getElementById('slider-line');
 
   let hasRef = false; let hasTarget = false;
+  let refMediaElement = null;   // 追加：リファレンス画像も要素として保持
   let targetMediaElement = null;
 
   function handleUpload(input, thumbContainer, isRef) {
@@ -82,7 +83,8 @@
       thumbContainer.innerHTML = '';
       thumbContainer.appendChild(mediaEl);
       
-      if (isRef) { hasRef = true; } 
+      // 画像・動画要素を変数に保存しておく
+      if (isRef) { hasRef = true; refMediaElement = mediaEl; } 
       else { hasTarget = true; targetMediaElement = mediaEl; }
       
       if (hasRef && hasTarget) generateBtn.disabled = false;
@@ -92,33 +94,43 @@
   handleUpload(inputRef, document.getElementById('thumb-ref'), true);
   handleUpload(inputTarget, document.getElementById('thumb-target'), false);
 
-  async function getFrameFromMedia(mediaEl) {
-    if (mediaEl.tagName.toLowerCase() === 'img') {
-      const response = await fetch(mediaEl.src);
-      return await response.blob();
-    }
+  // 🌟追加：ブラウザ側で画像を縮小・軽量化する関数
+  async function getResizedBlob(mediaEl) {
     const canvas = document.createElement('canvas');
-    canvas.width = mediaEl.videoWidth;
-    canvas.height = mediaEl.videoHeight;
-    canvas.getContext('2d').drawImage(mediaEl, 0, 0, canvas.width, canvas.height);
-    return new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg'));
+    const MAX_SIZE = 800; // 最大800pxに縮小
+    
+    let w = mediaEl.tagName.toLowerCase() === 'video' ? mediaEl.videoWidth : (mediaEl.naturalWidth || mediaEl.width);
+    let h = mediaEl.tagName.toLowerCase() === 'video' ? mediaEl.videoHeight : (mediaEl.naturalHeight || mediaEl.height);
+
+    // アスペクト比を保ったまま縮小計算
+    if (w > h && w > MAX_SIZE) { h = Math.floor(h * (MAX_SIZE / w)); w = MAX_SIZE; }
+    else if (h > MAX_SIZE) { w = Math.floor(w * (MAX_SIZE / h)); h = MAX_SIZE; }
+
+    canvas.width = w;
+    canvas.height = h;
+    
+    // Canvasに描画（ここで画像が圧縮される）
+    canvas.getContext('2d').drawImage(mediaEl, 0, 0, w, h);
+    
+    // 0.8(80%)の画質のJPEGにして返す
+    return new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.8));
   }
 
   generateBtn.addEventListener('click', async () => {
-    generateBtn.textContent = '⏳ 解析中...';
+    generateBtn.textContent = '⏳ 軽量化して送信中...';
     generateBtn.disabled = true;
 
     try {
-      const refFile = inputRef.files[0];
-      const targetBlob = await getFrameFromMedia(targetMediaElement);
+      // 🌟変更：リファレンスもターゲットも、送信前にブラウザ側でリサイズする！
+      const refBlob = await getResizedBlob(refMediaElement);
+      const targetBlob = await getResizedBlob(targetMediaElement);
       
       imgBefore.src = URL.createObjectURL(targetBlob);
 
       const formData = new FormData();
-      formData.append('ref', refFile);
+      formData.append('ref', refBlob, 'ref.jpg');
       formData.append('target', targetBlob, 'target.jpg');
 
-      // 本番環境でも動くように相対パスに変更
       const response = await fetch('/api/preview', {
         method: 'POST',
         body: formData
@@ -135,7 +147,7 @@
 
     } catch (error) {
       console.error(error);
-      alert('エラーが発生しました。');
+      alert('エラーが発生しました。ログを確認してください。');
       generateBtn.textContent = '🎨 AIでカラーマッチング';
       generateBtn.disabled = false;
     }

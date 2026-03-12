@@ -15,20 +15,32 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# トップページ ( / ) にアクセスしたときに index.html を返す
 @app.get("/")
 async def read_index():
     return FileResponse("index.html")
 
-# 画像解析のAPI ( /api/preview )
+# 🌟 追加：メモリ不足（OOM）対策用のリサイズ関数
+def resize_image(img, max_size=800):
+    h, w = img.shape[:2]
+    # 縦か横、長い方が max_size を超えていたら縮小する
+    if max(h, w) > max_size:
+        scale = max_size / max(h, w)
+        new_w, new_h = int(w * scale), int(h * scale)
+        img = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_AREA)
+    return img
+
 @app.post("/api/preview")
 async def generate_preview(ref: UploadFile = File(...), target: UploadFile = File(...)):
     ref_bytes = await ref.read()
     target_bytes = await target.read()
     
-    # 画像をメモリ上で読み込む
+    # 画像を読み込む
     ref_img = cv2.imdecode(np.frombuffer(ref_bytes, np.uint8), cv2.IMREAD_COLOR)
     target_img = cv2.imdecode(np.frombuffer(target_bytes, np.uint8), cv2.IMREAD_COLOR)
+
+    # 🌟 追加：ここで画像をリサイズしてサーバーのパンクを防ぐ！
+    ref_img = resize_image(ref_img)
+    target_img = resize_image(target_img)
 
     # LAB色空間に変換
     ref_lab = cv2.cvtColor(ref_img, cv2.COLOR_BGR2LAB).astype("float32")
@@ -48,6 +60,6 @@ async def generate_preview(ref: UploadFile = File(...), target: UploadFile = Fil
     # BGRに戻す
     result_bgr = cv2.cvtColor(shifted_lab, cv2.COLOR_LAB2BGR)
 
-    # JPEG画像としてエンコードして返す
-    _, encoded_img = cv2.imencode('.jpg', result_bgr)
+    # JPEG画像としてエンコードして返す（画質を85%にしてさらに軽量化）
+    _, encoded_img = cv2.imencode('.jpg', result_bgr, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
     return Response(content=encoded_img.tobytes(), media_type="image/jpeg")
